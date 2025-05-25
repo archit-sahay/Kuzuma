@@ -1,0 +1,5 @@
+*.env
+*.dockerignore
+*json
+.idea/*
+__pycache__/*
