@@ -1,36 +1,25 @@
 import os
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 
+from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from src.models.db_models import Base
 
 load_dotenv()
 
-URL = os.getenv("DB_URL")
+MONGODB_URL = os.getenv("MONGODB_URL")  # e.g., "mongodb://localhost:27017"
 
-engine = create_engine(
-    URL,
-    echo=True,
-    pool_size=20,
-    max_overflow=30,
-    pool_timeout=30,
-    pool_recycle=1800
+client = AsyncIOMotorClient(
+    MONGODB_URL,
+    tls=True,
+    tlsAllowInvalidCertificates=True
 )
-engine.dispose()
-Session_Local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+db = client.get_database()  # Optionally specify db name here
 
 
-def create_tables():
-    Base.metadata.create_all(bind=engine)
-
-
-@contextmanager
-def get_db():
-    db = Session_Local()
+@asynccontextmanager
+# Dependency for FastAPI to get db instance
+async def get_db():
     try:
         yield db
     finally:
-        db.close()
+        pass  # Motor client handles connection pooling automatically

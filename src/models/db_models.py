@@ -1,14 +1,36 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text
-from sqlalchemy.orm import declarative_base
-from sqlalchemy.sql import func
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional
+from datetime import datetime
+from bson import ObjectId
+# from pydantic import core_schema
 
-Base = declarative_base()
+
+class PyObjectId(ObjectId):
+
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v):
+        if not ObjectId.is_valid(v):
+            raise ValueError("Invalid ObjectId")
+        return ObjectId(v)
+
+    def __get_pydantic_json_schema__(self, core_schema):
+        # Tell Pydantic this should be serialized as a string
+        return core_schema.StringSchema()
 
 
-class History(Base):
-    __tablename__ = 'chat_history'
-    id = Column(Integer, primary_key=True)
-    email = Column(String(255), nullable=False)
-    name = Column(String(255), nullable=False)
-    history = Column(Text, nullable=False)
-    created_on = Column(DateTime, server_default=func.now())
+# Pydantic model for request/response
+class History(BaseModel):
+    # id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    email: EmailStr
+    name: str
+    history: str
+    created_on: Optional[datetime] = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        allow_population_by_field_name = True
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}

@@ -13,11 +13,11 @@ from fastapi.responses import FileResponse
 from src.controllers.socket_controller import socket_app
 from src.controllers.spotify_controller import router
 from src.controllers.anilist_controller import router as anilist_router
-from src.config.db_config import create_tables
+# from src.config.db_config import create_tables
 from src.services.count_service import count_service
 
 load_dotenv()
-create_tables()
+# create_tables()
 
 
 @asynccontextmanager

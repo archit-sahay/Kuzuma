@@ -122,7 +122,6 @@ async def disconnect_service(sid):
             conversation_lines.append(f"[Function {entry.get('name')} Response]: {content}")
 
     conversation_text = "\n\n".join(conversation_lines)
-    with get_db() as db:
-        add_history(db=db, name=name, email=email, history=conversation_text)
+    async with get_db() as db:
+        await add_history(db=db, name=name, email=email, history=conversation_text)
     # return username, conversation_text
-

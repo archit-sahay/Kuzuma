@@ -60,26 +60,3 @@ async def spotify_callback(request: Request):
         "scopes_granted": token_info.get("scope").split(" ")
     })
 
-
-# ─── 3. Token Check (optional) ───────────────────────────────────────────────
-# @router.get("/token", summary="Inspect cached token info")
-# def inspect_token():
-#     """
-#     Returns the current token info (access_token, expiry, etc.).
-#     Useful for debugging or ensuring your refresh logic is working.
-#     """
-#     token_info = sp_oauth.get_cached_token()
-#     if not token_info:
-#         raise HTTPException(404, detail="No token cached. Call /login first.")
-#     return token_info
-
-
-# ─── 4. Mount this router in your main.py ────────────────────────────────────
-#
-# from fastapi import FastAPI
-# from controllers.spotify_auth import router as spotify_auth_router
-#
-# app = FastAPI()
-# app.include_router(spotify_auth_router)
-#
-# # ... your other routes, including your AI assistant endpoints …
