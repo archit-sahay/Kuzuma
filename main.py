@@ -10,14 +10,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from src.controllers.anilist_controller import router as anilist_router
 from src.controllers.socket_controller import socket_app
 from src.controllers.spotify_controller import router
-from src.controllers.anilist_controller import router as anilist_router
-# from src.config.db_config import create_tables
 from src.services.count_service import count_service
 
 load_dotenv()
-# create_tables()
 
 
 @asynccontextmanager
@@ -39,7 +37,7 @@ async def lifespan(application: FastAPI):
         os._exit(EX_OK)  # Forcefully kill the process
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, root_path="/kazuma")
 app.include_router(router)
 app.include_router(anilist_router)
 
