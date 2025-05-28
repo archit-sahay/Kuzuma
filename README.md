@@ -1,9 +1,4 @@
 
-
-Certainly! Here's the complete README in Markdown format for your interactive resume backend project:
-
----
-
 # Kuzuma – Interactive Resume Backend
 
 Kuzuma is a backend application designed to power an interactive resume platform. It facilitates real-time communication and stores conversational data, enabling dynamic and engaging user experiences.
