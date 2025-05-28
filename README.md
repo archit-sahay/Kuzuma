@@ -1,4 +1,4 @@
-[![The Ultimate FastAPI Tutorial Part 12 - Setting Up a React Frontend](https://tse2.mm.bing.net/th/id/OIP.qn1MjfHj1Hh6T9ckVVU6aAHaE-?pid=Api)](https://christophergs.com/tutorials/ultimate-fastapi-tutorial-pt-12-react-js-frontend/)
+
 
 Certainly! Here's the complete README in Markdown format for your interactive resume backend project:
 
