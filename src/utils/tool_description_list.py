@@ -141,5 +141,25 @@ tools = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_recent_tens",
+            "description": (
+                "Returns your most recent favourite anime that you rated 10/10 on AniList. "
+                "Each anime is a dictionary with 'title', 'english_title', 'url', 'updated_at', and 'year'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of recent 10/10 anime to return (default 10)"
+                    }
+                },
+                "required": []
+            }
+        }
     }
 ]

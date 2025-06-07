@@ -230,6 +230,80 @@ def get_professional_experience():
     }
 
 
+def get_recent_tens(limit: int = 10):
+    """
+    Returns your most recent anime that you rated 10/10.
+    Returns a list of dictionaries with anime info.
+    """
+    access_token = os.environ.get("ANILIST_API_KEY")
+    username = "Architrash"
+
+    query = '''
+    query ($userName: String) {
+      MediaListCollection(userName: $userName, type: ANIME, sort: UPDATED_TIME_DESC) {
+        lists {
+          entries {
+            score
+            updatedAt
+            media {
+              id
+              title {
+                romaji
+                english
+              }
+              siteUrl
+              startDate {
+                year
+                month
+                day
+              }
+            }
+          }
+        }
+      }
+    }
+    '''
+
+    variables = {"userName": username}
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
+    response = requests.post(
+        "https://graphql.anilist.co",
+        json={"query": query, "variables": variables},
+        headers=headers
+    )
+
+    data = response.json()
+    if "errors" in data:
+        return f"API Error: {data['errors']}"
+
+    collection = data.get("data", {}).get("MediaListCollection")
+    if not collection or not collection.get("lists"):
+        return "No anime data found."
+
+    # Collect all entries with score 10 and sort by updatedAt
+    ten_rated_anime = []
+    for lst in collection["lists"]:
+        for entry in lst["entries"]:
+            if entry["score"] == 10:
+                anime = entry["media"]
+                ten_rated_anime.append({
+                    "title": anime["title"]["romaji"],
+                    "english_title": anime["title"].get("english"),
+                    "url": anime["siteUrl"],
+                    "updated_at": entry["updatedAt"],
+                    "year": anime["startDate"]["year"] if anime["startDate"] else None
+                })
+
+    # Sort by updatedAt (most recent first) and limit results
+    ten_rated_anime.sort(key=lambda x: x["updated_at"], reverse=True)
+    return ten_rated_anime[:limit]
+
+
 tool_map = {
     "get_top_tracks": get_top_tracks,
     "get_top_artists": get_top_artists,
@@ -237,5 +311,6 @@ tool_map = {
     "get_genre_distribution": get_genre_distribution,
     "get_anime_rating": get_anime_rating,
     "get_currently_watching": get_currently_watching,
-    "get_professional_experience": get_professional_experience
+    "get_professional_experience": get_professional_experience,
+    "get_recent_tens": get_recent_tens,
 }

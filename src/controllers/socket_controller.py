@@ -29,7 +29,7 @@ async def start(sid, data):
 @sio.event
 async def message(sid, data):
     print(f"[{datetime.now().strftime('%A, %d-%m-%Y %H:%M:%S')}] Message Received from Socket ID: [{sid}] and data: [{data}]")
-    await message_service(sid, json.loads(data)["text"])
+    await message_service(sid, data["text"])
 
 
 @sio.event

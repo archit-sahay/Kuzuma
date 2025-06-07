@@ -1,5 +1,6 @@
 import os
 import json
+import traceback
 from datetime import datetime
 from groq import Groq
 from dotenv import load_dotenv
