@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 from collections import Counter
+from datetime import date
 
 
 load_dotenv()
@@ -200,6 +201,35 @@ def get_currently_watching():
     return anilist_
 
 
+def get_professional_experience():
+    """
+    Calculate professional experience from January 15, 2024 to current date.
+    Returns a dictionary with years and months of experience.
+    """
+    start_date = date(2024, 1, 15)
+    current_date = date.today()
+
+    # Calculate years and months manually
+    years = current_date.year - start_date.year
+    months = current_date.month - start_date.month
+
+    # Adjust if current day is before start day
+    if current_date.day < start_date.day:
+        months -= 1
+
+    # Adjust if months is negative
+    if months < 0:
+        years -= 1
+        months += 12
+
+    return {
+        "years": years,
+        "months": months,
+        "start_date": "January 15, 2024",
+        "current_date": current_date.strftime("%B %d, %Y")
+    }
+
+
 tool_map = {
     "get_top_tracks": get_top_tracks,
     "get_top_artists": get_top_artists,
@@ -207,4 +237,5 @@ tool_map = {
     "get_genre_distribution": get_genre_distribution,
     "get_anime_rating": get_anime_rating,
     "get_currently_watching": get_currently_watching,
+    "get_professional_experience": get_professional_experience
 }

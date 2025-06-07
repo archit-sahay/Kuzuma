@@ -126,5 +126,20 @@ tools = [
                 "required": []
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_professional_experience",
+            "description": (
+                "Returns Archit's professional experience duration from January 15, 2024 to current date. "
+                "Returns a dictionary with 'years', 'months', 'start_date', and 'current_date'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
     }
 ]
