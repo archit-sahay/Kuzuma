@@ -1,13 +1,12 @@
-from typing import List, Dict
-import requests
-from spotipy import Spotify
-from spotipy.oauth2 import SpotifyOAuth
 import os
-from dotenv import load_dotenv
-from pathlib import Path
 from collections import Counter
 from datetime import date
+from pathlib import Path
+from typing import List, Dict
 
+from dotenv import load_dotenv
+from spotipy import Spotify
+from spotipy.oauth2 import SpotifyOAuth
 
 load_dotenv()
 
@@ -93,7 +92,6 @@ def get_genre_distribution(time_range: str = "medium_term", limit: int = 20) -> 
 def get_anime_rating(anime_name):
 
     # 1. Search for the anime by name
-    access_token = os.getenv("ANILIST_API_KEY")
     search_query = '''
     query ($search: String) {
       Media(search: $search, type: ANIME) {
@@ -104,18 +102,9 @@ def get_anime_rating(anime_name):
       }
     }
     '''
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-    search_variables = {"search": anime_name}
-    search_resp = requests.post(
-        "https://graphql.anilist.co",
-        json={"query": search_query, "variables": search_variables},
-        headers=headers
-    )
-    search_data = search_resp.json()
+
+    search_data = _graphql_query(query=search_query, variables={"search": anime_name})
+
     if not search_data.get("data") or not search_data["data"]["Media"]:
         return f"Anime '{anime_name}' not found."
 
@@ -133,12 +122,8 @@ def get_anime_rating(anime_name):
     }
     '''
     rating_variables = {"mediaId": anime_id, "userName": "Architrash"}
-    rating_resp = requests.post(
-        "https://graphql.anilist.co",
-        json={"query": rating_query, "variables": rating_variables},
-        headers=headers
-    )
-    rating_data = rating_resp.json()
+
+    rating_data = _graphql_query(query=rating_query, variables=rating_variables)
     entry = rating_data.get("data", {}).get("MediaList")
     if entry is None:
         return f"You have not watched '{anime_title}'."
@@ -149,8 +134,6 @@ def get_anime_rating(anime_name):
 
 
 def get_currently_watching():
-    access_token = os.environ.get("ANILIST_API_KEY")
-    username = "Architrash"
     query = '''
     query ($userName: String) {
       MediaListCollection(userName: $userName, type: ANIME, status: CURRENT) {
@@ -170,18 +153,9 @@ def get_currently_watching():
       }
     }
     '''
-    variables = {"userName": username}
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-    response = requests.post(
-        "https://graphql.anilist.co",
-        json={"query": query, "variables": variables},
-        headers=headers
-    )
-    data = response.json()
+
+    data = _graphql_query(query=query, variables={"userName": "Architrash"})
+
     if "errors" in data:
         return f"API Error: {data['errors']}"
     collection = data.get("data", {}).get("MediaListCollection")
@@ -230,13 +204,26 @@ def get_professional_experience():
     }
 
 
-def get_recent_tens(limit: int = 10):
+def get_rated_anime(limit: int = 10, score_filter: str = "top", min_score: int = None, max_score: int = None):
     """
-    Returns your most recent anime that you rated 10/10.
-    Returns a list of dictionaries with anime info.
+    Returns anime based on rating criteria with flexible filtering options.
+
+    Args:
+        limit (int): Number of results to return (default: 10)
+        score_filter (str): Filter type - "top", "bottom", "tens", "all", or "range"
+        min_score (int): Minimum score for range filtering (optional)
+        max_score (int): Maximum score for range filtering (optional)
+
+    Returns:
+        List of dictionaries with anime info, or error message
+
+    Examples:
+        get_rated_anime(5, "top")          # Top 5 highest rated
+        get_rated_anime(3, "bottom")       # Bottom 3 lowest rated
+        get_rated_anime(10, "tens")        # Most recent 10/10 rated
+        get_rated_anime(15, "all")         # 15 most recently updated (any score)
+        get_rated_anime(8, "range", 7, 9)  # 8 anime rated between 7-9
     """
-    access_token = os.environ.get("ANILIST_API_KEY")
-    username = "Architrash"
 
     query = '''
     query ($userName: String) {
@@ -257,6 +244,9 @@ def get_recent_tens(limit: int = 10):
                 month
                 day
               }
+              format
+              status
+              episodes
             }
           }
         }
@@ -264,7 +254,122 @@ def get_recent_tens(limit: int = 10):
     }
     '''
 
-    variables = {"userName": username}
+    data = _graphql_query(query=query, variables={"userName": "Architrash"})
+
+    if "errors" in data:
+        return f"API Error: {data['errors']}"
+
+    collection = data.get("data", {}).get("MediaListCollection")
+    if not collection or not collection.get("lists"):
+        return "No anime data found."
+
+    # Collect all entries with scores
+    all_anime = []
+    for lst in collection["lists"]:
+        for entry in lst["entries"]:
+            # Only include entries that have been rated (score > 0)
+            if entry["score"] > 0:
+                anime = entry["media"]
+                all_anime.append({
+                    "title": anime["title"]["romaji"],
+                    "english_title": anime["title"].get("english"),
+                    "url": anime["siteUrl"],
+                    "score": entry["score"],
+                    "updated_at": entry["updatedAt"],
+                    "year": anime["startDate"]["year"] if anime["startDate"] else None,
+                    "format": anime.get("format"),
+                    "status": anime.get("status"),
+                    "episodes": anime.get("episodes")
+                })
+
+    if not all_anime:
+        return "No rated anime found."
+
+    # Apply filtering based on score_filter parameter
+    if score_filter == "tens":
+        # Only 10/10 rated anime, sorted by most recent update
+        filtered_anime = [anime for anime in all_anime if anime["score"] == 10]
+        filtered_anime.sort(key=lambda x: x["updated_at"], reverse=True)
+
+    elif score_filter == "top":
+        # Highest rated anime first, then by most recent update
+        filtered_anime = sorted(all_anime, key=lambda x: (x["score"], x["updated_at"]), reverse=True)
+
+    elif score_filter == "bottom":
+        # Lowest rated anime first, then by most recent update
+        filtered_anime = sorted(all_anime, key=lambda x: (x["score"], -x["updated_at"]))
+
+    elif score_filter == "range" and min_score is not None and max_score is not None:
+        # Anime within specified score range, sorted by score then update time
+        filtered_anime = [anime for anime in all_anime if min_score <= anime["score"] <= max_score]
+        filtered_anime.sort(key=lambda x: (x["score"], x["updated_at"]), reverse=True)
+
+    elif score_filter == "all":
+        # All rated anime, sorted by most recent update
+        filtered_anime = sorted(all_anime, key=lambda x: x["updated_at"], reverse=True)
+
+    else:
+        # Default to top-rated if invalid filter provided
+        filtered_anime = sorted(all_anime, key=lambda x: (x["score"], x["updated_at"]), reverse=True)
+
+    return filtered_anime[:limit]
+
+
+def get_anime_stats():
+    """
+    Returns statistics about anime ratings.
+    """
+    query = '''
+    query ($userName: String) {
+      MediaListCollection(userName: $userName, type: ANIME) {
+        lists {
+          entries {
+            score
+          }
+        }
+      }
+    }
+    '''
+
+    stats_data = _graphql_query(query=query, variables={"userName": "Architrash"})
+
+    if "errors" in stats_data:
+        return f"API Error: {stats_data['errors']}"
+
+    collection_ = stats_data.get("data", {}).get("MediaListCollection")
+    if not collection_ or not collection_.get("lists"):
+        return "No anime data found."
+
+    # Collect all scores
+    scores = []
+    for lst in collection_["lists"]:
+        for entry in lst["entries"]:
+            if entry["score"] > 0:  # Only count rated anime
+                scores.append(entry["score"])
+
+    if not scores:
+        return "No rated anime found."
+
+    from collections import Counter
+    score_counts = Counter(scores)
+
+    return {
+        "total_rated": len(scores),
+        "average_score": round(sum(scores) / len(scores), 2),
+        "highest_score": max(scores),
+        "lowest_score": min(scores),
+        "score_distribution": dict(sorted(score_counts.items())),
+        "tens_count": score_counts.get(10, 0),
+        "ones_count": score_counts.get(1, 0)
+    }
+
+
+def _graphql_query(query: str, variables: dict = None):
+    """Helper function to make GraphQL queries to AniList API"""
+    import os
+    import requests
+
+    access_token = os.environ.get("ANILIST_API_KEY")
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
@@ -277,31 +382,7 @@ def get_recent_tens(limit: int = 10):
         headers=headers
     )
 
-    data = response.json()
-    if "errors" in data:
-        return f"API Error: {data['errors']}"
-
-    collection = data.get("data", {}).get("MediaListCollection")
-    if not collection or not collection.get("lists"):
-        return "No anime data found."
-
-    # Collect all entries with score 10 and sort by updatedAt
-    ten_rated_anime = []
-    for lst in collection["lists"]:
-        for entry in lst["entries"]:
-            if entry["score"] == 10:
-                anime = entry["media"]
-                ten_rated_anime.append({
-                    "title": anime["title"]["romaji"],
-                    "english_title": anime["title"].get("english"),
-                    "url": anime["siteUrl"],
-                    "updated_at": entry["updatedAt"],
-                    "year": anime["startDate"]["year"] if anime["startDate"] else None
-                })
-
-    # Sort by updatedAt (most recent first) and limit results
-    ten_rated_anime.sort(key=lambda x: x["updated_at"], reverse=True)
-    return ten_rated_anime[:limit]
+    return response.json()
 
 
 tool_map = {
@@ -312,5 +393,6 @@ tool_map = {
     "get_anime_rating": get_anime_rating,
     "get_currently_watching": get_currently_watching,
     "get_professional_experience": get_professional_experience,
-    "get_recent_tens": get_recent_tens,
+    "get_anime_stats": get_anime_stats,
+    "get_rated_anime": get_rated_anime,
 }

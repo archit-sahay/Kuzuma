@@ -145,19 +145,46 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "get_recent_tens",
+            "name": "get_rated_anime",
             "description": (
-                "Returns your most recent favourite anime that you rated 10/10 on AniList. "
-                "Each anime is a dictionary with 'title', 'english_title', 'url', 'updated_at', and 'year'."
+                "Retrieves anime from Archit's AniList based on rating criteria. Can get top-rated, bottom-rated, perfect 10s, or anime within specific score ranges. "
+                "Each anime is a dictionary with 'title', 'english_title', 'url', 'score', 'updated_at', and 'year'."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "limit": {
                         "type": "integer",
-                        "description": "Number of recent 10/10 anime to return (default 10)"
+                        "description": "Number of anime to return (default 10)"
+                    },
+                    "score_filter": {
+                        "type": "string",
+                        "description": "Filter type: top, bottom, tens, all, or range (default top)"
+                    },
+                    "min_score": {
+                        "type": "integer",
+                        "description": "Minimum score for range filtering (1-10, only used with 'range' filter)"
+                    },
+                    "max_score": {
+                        "type": "integer",
+                        "description": "Maximum score for range filtering (1-10, only used with 'range' filter)"
                     }
                 },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_anime_stats",
+            "description": (
+                "Returns comprehensive statistics about Archit's anime rating patterns including total rated anime, average score, score distribution, and counts of perfect 10s and lowest ratings. "
+                "Returns a dictionary with statistics about viewing habits and rating tendencies."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
                 "required": []
             }
         }

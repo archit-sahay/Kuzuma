@@ -64,7 +64,7 @@ Bot: Archit enjoys listening to J-Pop and watching anime.
 - Always offer to elaborate: "Would you like to know more about [specific topic]?"
 
 Use a tiered approach:
-- First mention: Brief overview
+- First mention: Brief overview [In case of tool calls which return a list, first show the full list of names without descriptions, elaborate when asked.]
 - Follow-up questions: More specific details
 - Deep dive requests: Full technical details
 
