@@ -7,6 +7,9 @@ from typing import List, Dict
 from dotenv import load_dotenv
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
+from src.logger import get_logger
+
+log = get_logger(__name__)
 
 load_dotenv()
 
@@ -110,7 +113,7 @@ def get_anime_rating(anime_name):
 
     anime_id = search_data["data"]["Media"]["id"]
     anime_title = search_data["data"]["Media"]["title"]["romaji"]
-    print(f"\n\nSearch Results for '{anime_name}': [{search_data['data']}]\n\n")
+    log.info(f"\n\nSearch Results for '{anime_name}': [{search_data['data']}]\n\n")
 
     # 2. Fetch your list entry for this anime, specifying your username
     rating_query = '''
