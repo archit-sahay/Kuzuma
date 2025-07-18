@@ -14,26 +14,28 @@ from src.controllers.anilist_controller import router as anilist_router
 from src.controllers.socket_controller import socket_app
 from src.controllers.spotify_controller import router
 from src.services.count_service import count_service
-from src.logger import init_logger as __initialize_logger__
+from src.logger import get_logger
 
 load_dotenv()
+
+# Logger is now initialized in src/__init__.py
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     try:
-        print(f"FastAPI App: {application.__doc__}")
+        logger.info(f"FastAPI App: {application.__doc__}")
         yield
     except Exception as e:
         # Log the error and any pending tasks
-        print(f"Error during shutdown: {e.__traceback__}")
+        logger.error(f"Error during shutdown: {e.__traceback__}")
         pending_tasks = [task for task in all_tasks() if not task.done()]
-        print(f"Pending tasks during shutdown: {pending_tasks}")
+        logger.info(f"Pending tasks during shutdown: {pending_tasks}")
         for task in pending_tasks:
-            print(f"- Task:- [{task.get_coro()}]")
+            logger.info(f"- Task:- [{task.get_coro()}]")
     finally:
-
-        print("Forcing application shutdown now.")
+        logger.info("Forcing application shutdown now.")
         # noinspection PyProtectedMember
         os._exit(EX_OK)  # Forcefully kill the process
 
@@ -54,20 +56,20 @@ app.add_middleware(
 @app.get("/", tags=["Health Check"])
 async def home():
     image_path = os.getenv("HEALTH_PATH")
-    print(image_path)
+    logger.info(f"Health check requested, image path: {image_path}")
     if not Path(image_path).is_file():
+        logger.warning(f"Image not found at path: {image_path}")
         raise HTTPException(status_code=404, detail="Image not found")
     return FileResponse(image_path, media_type="image/png")
 
 
 @app.get("/count", tags=["Visitor Count"])
 async def count():
-
+    logger.info("Visitor count requested")
     return {"count": count_service()}
 
 
 app.mount("/", app=socket_app)
 
 if __name__ == "__main__":
-    __initialize_logger__()
     uvicorn.run("main:app", host="0.0.0.0", port=6969, reload=True, lifespan="on", timeout_keep_alive=50)

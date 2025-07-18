@@ -53,6 +53,7 @@ def init_logger():
     log_level = _get_log_level()
     log_format = _get_log_format()
 
+    # Use print for logger initialization to avoid circular dependency
     print(f"Initializing logger with configurations: \n"
           f"Log file path: {log_file_path} \n"
           f"Log level: {log_level} \n"
@@ -78,7 +79,9 @@ def get_logger(name: str) -> Logger:
         name = "Kazuma: Archit's clone"
 
     logger: Logger = logging.getLogger(name)
-    logger.setLevel(_get_log_level())
+    # Don't override the level if it's already set by the root logger
+    if logger.level == logging.NOTSET:
+        logger.setLevel(_get_log_level())
     return logger
 
 
@@ -95,11 +98,13 @@ def _get_log_file_path() -> str:
     return log_file_path
 
 
-def _get_log_level() -> str:
+def _get_log_level() -> int:
     log_level = os.environ.get("LOG_LEVEL", "DEBUG")
 
     if log_level is not None and log_level != "":
-        return logging.getLevelName(log_level)
+        return getattr(logging, log_level.upper(), logging.DEBUG)
+    
+    return logging.DEBUG
 
 
 def _get_log_format() -> str:
