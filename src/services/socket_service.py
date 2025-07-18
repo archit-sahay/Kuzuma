@@ -78,7 +78,7 @@ async def message_service(sid, message: str):
             # Call the LLM again, now with the tool result(s) in the history
             response = client.chat.completions.create(
                 messages=message_histories[sid],
-                model="qwen-qwq-32b",
+                model="deepseek-r1-distill-llama-70b",
                 tools=tools,
                 tool_choice="auto"
             )
