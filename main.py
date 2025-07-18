@@ -14,6 +14,7 @@ from src.controllers.anilist_controller import router as anilist_router
 from src.controllers.socket_controller import socket_app
 from src.controllers.spotify_controller import router
 from src.services.count_service import count_service
+from src.logger import init_logger as __initialize_logger__
 
 load_dotenv()
 
@@ -68,4 +69,5 @@ async def count():
 app.mount("/", app=socket_app)
 
 if __name__ == "__main__":
+    __initialize_logger__()
     uvicorn.run("main:app", host="0.0.0.0", port=6969, reload=True, lifespan="on", timeout_keep_alive=50)
