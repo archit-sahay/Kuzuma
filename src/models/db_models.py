@@ -27,7 +27,7 @@ class History(BaseModel):
     # id: Optional[PyObjectId] = Field(default=None, alias="_id")
     email: EmailStr
     name: str
-    history: str
+    messages: list = Field(default_factory=list)  # list of {role, content, timestamp}
     created_on: Optional[datetime] = Field(default_factory=datetime.utcnow)
 
     class Config:

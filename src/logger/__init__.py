@@ -7,8 +7,16 @@ from logging import Logger
 from logging.handlers import RotatingFileHandler
 
 
+MAX_GZ_FILES = 50  # keep at most 50 compressed logs
+
+
 def suppress_loggers():
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
+    # Suppress noisy third-party loggers (keep our own src.* at DEBUG)
+    # Only suppress the truly noisy internal stuff
+    for name in ("pymongo", "motor", "urllib3", "httpcore", "httpx", "groq._base_client", "spotipy"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+    # Keep socketio, engineio, and all src.* at DEBUG
 
 
 class GzipRotatingFileHandler(RotatingFileHandler):
@@ -41,6 +49,18 @@ class GzipRotatingFileHandler(RotatingFileHandler):
         # Reopen the current log file (app.log) for new logs
         if not self.delay:
             self.stream = self._open()
+
+        # Clean up old .gz files beyond MAX_GZ_FILES
+        try:
+            log_dir = os.path.dirname(self.baseFilename)
+            gz_files = sorted(
+                [f for f in os.listdir(log_dir) if f.endswith('.gz')],
+                key=lambda f: os.path.getmtime(os.path.join(log_dir, f))
+            )
+            for old_gz in gz_files[:-MAX_GZ_FILES]:
+                os.remove(os.path.join(log_dir, old_gz))
+        except Exception:
+            pass  # don't crash logging over cleanup
 
 
 def init_logger():
@@ -103,7 +123,7 @@ def _get_log_level() -> int:
 
     if log_level is not None and log_level != "":
         return getattr(logging, log_level.upper(), logging.DEBUG)
-    
+
     return logging.DEBUG
 
 

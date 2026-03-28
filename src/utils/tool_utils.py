@@ -1,4 +1,6 @@
 import os
+import time
+import requests
 from collections import Counter
 from datetime import date
 from pathlib import Path
@@ -7,15 +9,48 @@ from typing import List, Dict
 from dotenv import load_dotenv
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
+from src.utils.cache import cache, TTL_SHORT, TTL_MEDIUM, TTL_LONG
 from src.logger import get_logger
 
 log = get_logger(__name__)
+
+
+class ToolCircuitBreaker:
+    """Lightweight circuit breaker for individual tools."""
+    def __init__(self, threshold=2, recovery_time=120):
+        self.threshold = threshold
+        self.recovery_time = recovery_time
+        self.failures = 0
+        self.opened_at = None
+
+    @property
+    def is_open(self):
+        if self.opened_at is None:
+            return False
+        if time.time() - self.opened_at > self.recovery_time:
+            return False  # half-open: allow probe
+        return True
+
+    def record_success(self):
+        self.failures = 0
+        self.opened_at = None
+
+    def record_failure(self):
+        self.failures += 1
+        if self.failures >= self.threshold:
+            self.opened_at = time.time()
+            log.warning(f"Tool circuit breaker opened after {self.failures} failures")
+
+
+# Per-service circuit breakers (shared across tools using same service)
+_spotify_breaker = ToolCircuitBreaker(threshold=2, recovery_time=120)
+_anilist_breaker = ToolCircuitBreaker(threshold=2, recovery_time=120)
 
 load_dotenv()
 
 client_id = os.getenv('SPOTIPY_CLIENT_ID')
 client_secret = os.getenv('SPOTIPY_CLIENT_SECRET')
-redirect_uri = 'http://localhost:6969/auth/spotify/callback'
+redirect_uri = 'http://127.0.0.1:6969/auth/spotify/callback'
 scope = 'user-top-read'
 HERE = Path(__file__).resolve().parent   # .../src/utils
 
@@ -36,64 +71,118 @@ _sp_oauth = SpotifyOAuth(
 
 
 # ─── Internal helper to get a valid Spotify client ───────────────────────────
-def _get_spotify_client() -> Spotify:
-    token_info = _sp_oauth.get_cached_token()
-    if not token_info:
-        raise RuntimeError("No Spotify token cached; run the OAuth login flow first.")
-    if _sp_oauth.is_token_expired(token_info):
-        token_info = _sp_oauth.refresh_access_token(token_info["refresh_token"])
-    return Spotify(auth=token_info["access_token"])
+def _get_spotify_client():
+    """Returns a Spotify client or None if auth fails."""
+    if _spotify_breaker.is_open:
+        log.info("Spotify circuit breaker is open, skipping")
+        return None
+    try:
+        token_info = _sp_oauth.get_cached_token()
+        if not token_info:
+            log.warning("No Spotify token cached")
+            return None
+        if _sp_oauth.is_token_expired(token_info):
+            token_info = _sp_oauth.refresh_access_token(token_info["refresh_token"])
+        _spotify_breaker.record_success()
+        return Spotify(auth=token_info["access_token"])
+    except Exception as e:
+        log.error(f"Spotify auth failed: {e}")
+        _spotify_breaker.record_failure()
+        return None
+
+
+def _spotify_unavailable():
+    return {"error": "Spotify is temporarily unavailable. Try again later!"}
 
 
 # ─── Tool: Top Tracks ─────────────────────────────────────────────────────────
-def get_top_tracks(limit: int = 5, time_range: str = "medium_term") -> List[Dict[str, str]]:
-    """
-    Returns a list of your top tracks (name, artist, url) for a given time range.
-    """
+def get_top_tracks(limit: int = 5, time_range: str = "medium_term"):
+    cache_key = f"top_tracks:{limit}:{time_range}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     sp = _get_spotify_client()
-    items = sp.current_user_top_tracks(limit=limit, time_range=time_range)["items"]
-    return [
-        {"name": t["name"], "artist": t["artists"][0]["name"], "url": t["external_urls"]["spotify"]}
-        for t in items
-    ]
+    if not sp:
+        return _spotify_unavailable()
+    try:
+        items = sp.current_user_top_tracks(limit=limit, time_range=time_range)["items"]
+        result = [
+            {"name": t["name"], "artist": t["artists"][0]["name"], "url": t["external_urls"]["spotify"]}
+            for t in items
+        ]
+        cache.set(cache_key, result, TTL_SHORT)
+        return result
+    except Exception as e:
+        log.error(f"get_top_tracks failed: {e}")
+        return _spotify_unavailable()
 
 
 # ─── Tool: Top Artists ────────────────────────────────────────────────────────
-def get_top_artists(limit: int = 5, time_range: str = "medium_term") -> List[Dict[str, str]]:
-    """
-    Returns a list of your top artists (name, url) for a given time range.
-    """
+def get_top_artists(limit: int = 5, time_range: str = "medium_term"):
+    cache_key = f"top_artists:{limit}:{time_range}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     sp = _get_spotify_client()
-    items = sp.current_user_top_artists(limit=limit, time_range=time_range)["items"]
-    return [
-        {"name": a["name"], "url": a["external_urls"]["spotify"]}
-        for a in items
-    ]
+    if not sp:
+        return _spotify_unavailable()
+    try:
+        items = sp.current_user_top_artists(limit=limit, time_range=time_range)["items"]
+        result = [
+            {"name": a["name"], "url": a["external_urls"]["spotify"]}
+            for a in items
+        ]
+        cache.set(cache_key, result, TTL_SHORT)
+        return result
+    except Exception as e:
+        log.error(f"get_top_artists failed: {e}")
+        return _spotify_unavailable()
 
 
-def get_recently_played(limit: int = 20) -> List[Dict[str, str]]:
-    """
-    Returns a list of your most recently played tracks and timestamps.
-    """
+def get_recently_played(limit: int = 20):
+    cache_key = f"recently_played:{limit}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     sp = _get_spotify_client()
-    items = sp.current_user_recently_played(limit=limit)["items"]
-    return [{"track": it["track"]["name"], "played_at": it["played_at"]} for it in items]
+    if not sp:
+        return _spotify_unavailable()
+    try:
+        items = sp.current_user_recently_played(limit=limit)["items"]
+        result = [{"track": it["track"]["name"], "played_at": it["played_at"]} for it in items]
+        cache.set(cache_key, result, TTL_SHORT)
+        return result
+    except Exception as e:
+        log.error(f"get_recently_played failed: {e}")
+        return _spotify_unavailable()
 
 
-def get_genre_distribution(time_range: str = "medium_term", limit: int = 20) -> List[str]:
-    """
-    Returns the top 5 genres from your top artists in the given time range.
-    """
+def get_genre_distribution(time_range: str = "medium_term", limit: int = 20):
+    cache_key = f"genre_dist:{time_range}:{limit}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     sp = _get_spotify_client()
-    items = sp.current_user_top_artists(limit=limit, time_range=time_range)["items"]
-    genres = []
-    for artist in items:
-        genres.extend(artist.get("genres", []))
-    return [g for g, _ in Counter(genres).most_common(5)]
+    if not sp:
+        return _spotify_unavailable()
+    try:
+        items = sp.current_user_top_artists(limit=limit, time_range=time_range)["items"]
+        genres = []
+        for artist in items:
+            genres.extend(artist.get("genres", []))
+        result = [g for g, _ in Counter(genres).most_common(5)]
+        cache.set(cache_key, result, TTL_MEDIUM)
+        return result
+    except Exception as e:
+        log.error(f"get_genre_distribution failed: {e}")
+        return _spotify_unavailable()
 
 
 def get_anime_rating(anime_name):
-
+    cache_key = f"anime_rating:{anime_name}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
     # 1. Search for the anime by name
     search_query = '''
     query ($search: String) {
@@ -133,10 +222,15 @@ def get_anime_rating(anime_name):
     else:
         score = entry["score"]
         status = entry["status"]
-        return f"You have watched '{anime_title}' (status: {status}) and rated it {score}/10."
+        result = f"You have watched '{anime_title}' (status: {status}) and rated it {score}/10."
+        cache.set(cache_key, result, TTL_MEDIUM)
+        return result
 
 
 def get_currently_watching():
+    cached = cache.get("currently_watching")
+    if cached:
+        return cached
     query = '''
     query ($userName: String) {
       MediaListCollection(userName: $userName, type: ANIME, status: CURRENT) {
@@ -175,6 +269,7 @@ def get_currently_watching():
                 "url": anime["siteUrl"]
             })
             anilist_.append(anime["title"]["romaji"])
+    cache.set("currently_watching", anilist_, TTL_MEDIUM)
     return anilist_
 
 
@@ -353,7 +448,6 @@ def get_anime_stats():
     if not scores:
         return "No rated anime found."
 
-    from collections import Counter
     score_counts = Counter(scores)
 
     return {
@@ -368,24 +462,29 @@ def get_anime_stats():
 
 
 def _graphql_query(query: str, variables: dict = None):
-    """Helper function to make GraphQL queries to AniList API"""
-    import os
-    import requests
-
-    access_token = os.environ.get("ANILIST_API_KEY")
+    """Helper function to make GraphQL queries to AniList API.
+    Public profile queries don't require auth — eliminates token expiry issues."""
+    if _anilist_breaker.is_open:
+        return {"errors": [{"message": "AniList is temporarily unavailable"}]}
     headers = {
-        "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "Accept": "application/json"
     }
-
-    response = requests.post(
-        "https://graphql.anilist.co",
-        json={"query": query, "variables": variables},
-        headers=headers
-    )
-
-    return response.json()
+    try:
+        response = requests.post(
+            "https://graphql.anilist.co",
+            json={"query": query, "variables": variables},
+            headers=headers,
+            timeout=10
+        )
+        data = response.json()
+        if "errors" not in data:
+            _anilist_breaker.record_success()
+        return data
+    except Exception as e:
+        log.error(f"AniList query failed: {e}")
+        _anilist_breaker.record_failure()
+        return {"errors": [{"message": str(e)}]}
 
 
 tool_map = {

@@ -7,3 +7,5 @@ __pycache__/*
 *.pub
 *.ssh
 logs/*
+test_local.py
+.venv/

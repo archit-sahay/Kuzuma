@@ -1,7 +1,6 @@
 import os
-from asyncio import all_tasks
+import asyncio
 from contextlib import asynccontextmanager
-from os import EX_OK
 from pathlib import Path
 
 import uvicorn
@@ -14,39 +13,43 @@ from src.controllers.anilist_controller import router as anilist_router
 from src.controllers.socket_controller import socket_app
 from src.controllers.spotify_controller import router
 from src.services.count_service import count_service
+from src.services.socket_service import cleanup_stale_sessions, disconnect_service, message_histories
 from src.logger import get_logger
 
 load_dotenv()
 
-# Logger is now initialized in src/__init__.py
 logger = get_logger(__name__)
+
+_cleanup_task = None
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    global _cleanup_task
+    logger.info(f"FastAPI App starting up")
+    # Start background session cleanup
+    _cleanup_task = asyncio.create_task(cleanup_stale_sessions())
     try:
-        logger.info(f"FastAPI App: {application.__doc__}")
         yield
-    except Exception as e:
-        # Log the error and any pending tasks
-        logger.error(f"Error during shutdown: {e.__traceback__}")
-        pending_tasks = [task for task in all_tasks() if not task.done()]
-        logger.info(f"Pending tasks during shutdown: {pending_tasks}")
-        for task in pending_tasks:
-            logger.info(f"- Task:- [{task.get_coro()}]")
     finally:
-        logger.info("Forcing application shutdown now.")
-        # noinspection PyProtectedMember
-        os._exit(EX_OK)  # Forcefully kill the process
+        logger.info("Application shutting down. Saving active sessions...")
+        for sid in list(message_histories.keys()):
+            try:
+                await disconnect_service(sid)
+            except Exception as e:
+                logger.error(f"Failed to save session {sid} on shutdown: {e}")
+        if _cleanup_task:
+            _cleanup_task.cancel()
 
 
 app = FastAPI(lifespan=lifespan, root_path="/kazuma")
 app.include_router(router)
 app.include_router(anilist_router)
 
+cors_origins = os.getenv("CORS_ORIGINS", "https://kuzuma.space").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -66,10 +69,10 @@ async def home():
 @app.get("/count", tags=["Visitor Count"])
 async def count():
     logger.info("Visitor count requested")
-    return {"count": count_service()}
+    return {"count": await count_service()}
 
 
 app.mount("/", app=socket_app)
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=6969, reload=True, lifespan="on", timeout_keep_alive=50)
+    uvicorn.run("main:app", host="0.0.0.0", port=6969, lifespan="on", timeout_keep_alive=50)

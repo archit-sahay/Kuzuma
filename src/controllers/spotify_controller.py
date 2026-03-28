@@ -11,7 +11,7 @@ load_dotenv()
 # ─── CONFIGURATION ──────────────────────────────────────────────────────────
 client_id = os.getenv('SPOTIPY_CLIENT_ID')
 client_secret = os.getenv('SPOTIPY_CLIENT_SECRET')
-REDIRECT_URI = "http://localhost:6969/auth/spotify/callback"
+REDIRECT_URI = "http://127.0.0.1:6969/auth/spotify/callback"
 SCOPE = "user-top-read user-read-recently-played"
 CACHE_PATH = ".cache-spotify.json"
 
