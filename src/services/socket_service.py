@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,13 @@ from src.services.llm_service import llm, summary_client, SUMMARY_MODEL
 from src.logger import get_logger
 
 log = get_logger(__name__)
+
+# Strip leaked function call tags from LLM responses
+_FUNC_TAG_RE = re.compile(r'<function=\w+>.*?</function>', re.DOTALL)
+
+def _sanitize_response(content: str) -> str:
+    """Remove raw function call tags that some models leak into text."""
+    return _FUNC_TAG_RE.sub('', content).strip()
 
 TOOL_TIMEOUT = 15  # seconds
 MAX_HISTORY = 20  # messages before compaction
@@ -248,7 +256,7 @@ async def message_service(sid, message: str):
 
         # If we already have a non-streamed response (from tool loop), use it
         if response_message.content:
-            content = response_message.content
+            content = _sanitize_response(response_message.content)
             message_histories[sid].append({"role": "assistant", "content": content})
             log.info(f"[{datetime.now().strftime('%A, %d-%m-%Y %H:%M:%S')}] Emitting Response: [{content[:100]}...]")
             await sio.emit("message", {"text": content}, to=sid)
