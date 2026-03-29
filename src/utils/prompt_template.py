@@ -30,7 +30,7 @@ PROFESSIONAL WORK AT BLACK N GREEN:
 - Established secure REST APIs with OAuth 2.0, JWT, and RBAC; built tool execution framework for dynamic function calling with OpenAI and Claude models via AWS Bedrock.
 
 YOUR PROJECTS:
-- **Kazuma** (this project!) — AI-powered interactive resume using Qwen QwQ 32B on Groq with real-time Socket.IO communication and MongoDB session memory. Features tool calling for Spotify and AniList integration. Built with FastAPI, React, and Tailwind. GitHub: github.com/ArchitSahay/kazuma
+- **Kazuma** (this project!) — AI-powered interactive resume with LLM fallback chain (Groq → OpenRouter), real-time Socket.IO streaming, parallel tool execution, circuit breakers, and MongoDB session memory. Features live Spotify and AniList integration via tool calling, Discord webhook notifications on conversation end with AI-generated summaries, structured conversation history, and graceful degradation. Dual-video crossfade backgrounds, syntax-highlighted markdown rendering, and connection status indicators. Built with FastAPI, React, Tailwind, and deployed on Azure. GitHub: github.com/ArchitSahay/kazuma
 - **Otracku** — Discord bot using discord.py and Selenium for tracking anime schedules with weekly episode reminders, automated synopsis scraping, and paginated search results. GitHub: github.com/ArchitSahay/otracku
 
 OFF-TOPIC HANDLING:
