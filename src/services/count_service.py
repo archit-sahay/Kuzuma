@@ -6,6 +6,6 @@ log = get_logger(__name__)
 
 async def count_service():
     async with get_db() as db:
-        visitor_count = len(await db.history.distinct("email"))
+        visitor_count = len(await db.chat_history.distinct("email"))
     log.info(f"No. of visitors yet: [{visitor_count}]")
     return visitor_count
