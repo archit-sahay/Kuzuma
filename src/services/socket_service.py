@@ -1,7 +1,9 @@
 import asyncio
 import json
+import os
 import re
 import time
+import requests as http_requests
 from datetime import datetime
 from pathlib import Path
 from src.utils.prompt_template import prompt
@@ -24,6 +26,7 @@ def _sanitize_response(content: str) -> str:
     return _FUNC_TAG_RE.sub('', content).strip()
 
 TOOL_TIMEOUT = 15  # seconds
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 MAX_HISTORY = 20  # messages before compaction
 KEEP_RECENT = 10  # messages to keep after compaction
 SESSION_TTL = 1800  # 30 minutes idle timeout
@@ -32,6 +35,69 @@ sio = create_socketio_app()
 message_histories = {}
 user_map = {}
 session_last_active = {}  # sid -> timestamp
+
+
+# ─── Discord Notification ────────────────────────────────────────────────────
+
+async def _notify_discord(name: str, email: str, history: list):
+    """Send a chat summary to Discord webhook on conversation end."""
+    if not DISCORD_WEBHOOK_URL:
+        return
+
+    # Count user messages and calculate session duration
+    user_msgs = [m for m in history if m.get("role") == "user"]
+    if not user_msgs:
+        return  # Don't notify for sessions with no user messages
+
+    # Build conversation text for summary
+    convo_lines = []
+    for m in history:
+        role = m.get("role")
+        content = m.get("content", "")[:200]
+        if role in ("user", "assistant"):
+            convo_lines.append(f"{role}: {content}")
+
+    try:
+        summary_response = await asyncio.wait_for(
+            asyncio.to_thread(
+                summary_client.chat.completions.create,
+                messages=[{
+                    "role": "user",
+                    "content": f"Summarize this conversation in 2-3 sentences. Focus on what the visitor was interested in:\n\n" + "\n".join(convo_lines[-20:])
+                }],
+                model=SUMMARY_MODEL,
+                temperature=0.3,
+                max_tokens=150
+            ),
+            timeout=10
+        )
+        summary = summary_response.choices[0].message.content
+    except Exception as e:
+        log.warning(f"Discord summary generation failed: {e}")
+        summary = f"({len(user_msgs)} messages exchanged, summary unavailable)"
+
+    embed = {
+        "content": "@everyone",
+        "embeds": [{
+            "title": f"💬 New Conversation Ended",
+            "color": 0xF59E0B,  # amber
+            "fields": [
+                {"name": "Visitor", "value": name, "inline": True},
+                {"name": "Email", "value": email, "inline": True},
+                {"name": "Messages", "value": str(len(user_msgs)), "inline": True},
+                {"name": "Summary", "value": summary[:1024]},
+            ],
+            "timestamp": datetime.utcnow().isoformat()
+        }]
+    }
+
+    try:
+        await asyncio.to_thread(
+            http_requests.post, DISCORD_WEBHOOK_URL, json=embed, timeout=5
+        )
+        log.info(f"Discord notification sent for {email}")
+    except Exception as e:
+        log.warning(f"Discord webhook failed: {e}")
 
 
 # ─── Session Cleanup ─────────────────────────────────────────────────────────
@@ -354,6 +420,12 @@ async def disconnect_service(sid):
                 log.info(f"Wrote fallback history for {email} to {fallback_path}")
             except Exception as file_err:
                 log.error(f"Fallback file write also failed: {file_err}")
+
+        # Send Discord notification (fire-and-forget, don't block cleanup)
+        try:
+            await _notify_discord(name, email, history)
+        except Exception as notif_err:
+            log.warning(f"Discord notification failed: {notif_err}")
 
     except Exception as e:
         log.error(f"Error in disconnect_service: {e}", exc_info=True)
