@@ -3,6 +3,7 @@ import json
 import os
 import re
 import time
+import uuid
 import requests as http_requests
 from datetime import datetime
 from pathlib import Path
@@ -33,41 +34,48 @@ SESSION_TTL = 1800  # 30 minutes idle timeout
 
 sio = create_socketio_app()
 message_histories = {}
+save_histories = {}  # sid -> list of {role, content, timestamp} — never compacted, for MongoDB + Discord
+save_tool_calls = {}  # sid -> list of {name, args, timestamp} — tool calls log for MongoDB
 user_map = {}
 session_last_active = {}  # sid -> timestamp
 
 
 # ─── Discord Notification ────────────────────────────────────────────────────
 
-async def _notify_discord(name: str, email: str, history: list):
+async def _notify_discord(name: str, email: str, save_messages: list, conversation_id: str = None):
     """Send a chat summary to Discord webhook on conversation end."""
     if not DISCORD_WEBHOOK_URL:
         return
 
-    # Count user messages and calculate session duration
-    user_msgs = [m for m in history if m.get("role") == "user"]
+    # Count user messages
+    user_msgs = [m for m in save_messages if m.get("role") == "user"]
     if not user_msgs:
         return  # Don't notify for sessions with no user messages
 
-    # Build conversation text for summary
+    # Build conversation text for summary from uncompacted save_messages
     convo_lines = []
-    for m in history:
+    for m in save_messages:
         role = m.get("role")
-        content = m.get("content", "")[:200]
-        if role in ("user", "assistant"):
-            convo_lines.append(f"{role}: {content}")
+        content = m.get("content", "")[:500]
+        convo_lines.append(f"{role}: {content}")
 
     try:
         summary_response = await asyncio.wait_for(
             asyncio.to_thread(
                 summary_client.chat.completions.create,
-                messages=[{
-                    "role": "user",
-                    "content": f"Summarize this conversation in 2-3 sentences. Focus on what the visitor was interested in:\n\n" + "\n".join(convo_lines[-20:])
-                }],
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a conversation summarizer. Produce a brief 2-3 sentence summary of what the visitor was interested in. Do NOT roleplay, continue the conversation, or add meta-commentary."
+                    },
+                    {
+                        "role": "user",
+                        "content": "Summarize this conversation:\n\n" + "\n".join(convo_lines[-30:])
+                    }
+                ],
                 model=SUMMARY_MODEL,
                 temperature=0.3,
-                max_tokens=150
+                max_tokens=200
             ),
             timeout=10
         )
@@ -76,6 +84,7 @@ async def _notify_discord(name: str, email: str, history: list):
         log.warning(f"Discord summary generation failed: {e}")
         summary = f"({len(user_msgs)} messages exchanged, summary unavailable)"
 
+    conv_id_short = conversation_id[:8] if conversation_id else "n/a"
     embed = {
         "content": "@everyone",
         "embeds": [{
@@ -85,6 +94,7 @@ async def _notify_discord(name: str, email: str, history: list):
                 {"name": "Visitor", "value": name, "inline": True},
                 {"name": "Email", "value": email, "inline": True},
                 {"name": "Messages", "value": str(len(user_msgs)), "inline": True},
+                {"name": "ID", "value": conv_id_short, "inline": True},
                 {"name": "Summary", "value": summary[:1024]},
             ],
             "timestamp": datetime.utcnow().isoformat()
@@ -111,6 +121,8 @@ async def cleanup_stale_sessions():
         for sid in stale:
             log.info(f"Evicting stale session: {sid}")
             message_histories.pop(sid, None)
+            save_histories.pop(sid, None)
+            save_tool_calls.pop(sid, None)
             user_map.pop(sid, None)
             session_last_active.pop(sid, None)
         # Clean up expired cache entries
@@ -235,7 +247,11 @@ async def _execute_tool(tool_name, tool_args):
 async def start_service(sid, data):
     if sid not in user_map:
         log.info(f"Start Data: {data}")
+        if isinstance(data, str):
+            data = json.loads(data)
+        data["conversation_id"] = str(uuid.uuid4())
         user_map[sid] = data
+        log.info(f"Conversation ID: {data['conversation_id']}")
     session_last_active[sid] = time.time()
     await sio.emit("message", {
         "text": "Hey! I'm Archit — or well, a digital version of me. Ask me anything about my work, projects, or my questionable anime taste. What's up?"
@@ -248,9 +264,13 @@ async def message_service(sid, message: str):
     # Initialize history for new sessions
     if sid not in message_histories:
         message_histories[sid] = [{"role": "system", "content": prompt}]
+        save_histories[sid] = []
 
     # Add the user's message
     message_histories[sid].append({"role": "user", "content": message})
+    save_histories.setdefault(sid, []).append({
+        "role": "user", "content": message, "timestamp": datetime.now().isoformat()
+    })
 
     # Compact history if needed
     await _compact_history(sid)
@@ -296,6 +316,9 @@ async def message_service(sid, message: str):
                     continue
                 parsed_calls.append((tool_call, tool_name, tool_args))
                 tool_names.append(tool_name.replace('_', ' '))
+                save_tool_calls.setdefault(sid, []).append({
+                    "name": tool_name, "args": tool_args, "timestamp": datetime.now().isoformat()
+                })
 
             if parsed_calls:
                 # Show what we're checking
@@ -324,6 +347,9 @@ async def message_service(sid, message: str):
         if response_message.content:
             content = _sanitize_response(response_message.content)
             message_histories[sid].append({"role": "assistant", "content": content})
+            save_histories.setdefault(sid, []).append({
+                "role": "assistant", "content": content, "timestamp": datetime.now().isoformat()
+            })
             log.info(f"[{datetime.now().strftime('%A, %d-%m-%Y %H:%M:%S')}] Emitting Response: [{content[:100]}...]")
             await sio.emit("message", {"text": content}, to=sid)
         else:
@@ -342,14 +368,20 @@ async def message_service(sid, message: str):
                         full_content += delta
                         await sio.emit("stream", {"text": delta}, to=sid)
 
-                content = full_content or "I got a bit lost there. Could you rephrase that?"
+                content = _sanitize_response(full_content) if full_content else "I got a bit lost there. Could you rephrase that?"
                 message_histories[sid].append({"role": "assistant", "content": content})
+                save_histories.setdefault(sid, []).append({
+                    "role": "assistant", "content": content, "timestamp": datetime.now().isoformat()
+                })
                 await sio.emit("stream_end", {}, to=sid)
                 log.info(f"[{datetime.now().strftime('%A, %d-%m-%Y %H:%M:%S')}] Streamed Response: [{content[:100]}...]")
             except Exception as stream_err:
                 log.warning(f"Streaming failed, falling back: {stream_err}")
                 content = "I got a bit lost there. Could you rephrase that?"
                 message_histories[sid].append({"role": "assistant", "content": content})
+                save_histories.setdefault(sid, []).append({
+                    "role": "assistant", "content": content, "timestamp": datetime.now().isoformat()
+                })
                 await sio.emit("message", {"text": content}, to=sid)
 
     except asyncio.TimeoutError:
@@ -375,27 +407,20 @@ async def disconnect_service(sid):
             user_data = json.loads(user_data)
         name = user_data.get("name", "Unknown User")
         email = user_data.get("email", "unknown@unknown")
+        conversation_id = user_data.get("conversation_id")
 
-        history = message_histories[sid]
-
-        # Build structured messages list (skip system prompts)
-        structured_messages = []
-        for entry in history:
-            role = entry.get("role")
-            if role == "system":
-                continue
-            structured_messages.append({
-                "role": role,
-                "content": entry.get("content", ""),
-                "timestamp": datetime.now().isoformat()
-            })
+        # Use save_histories (full, uncompacted conversation) for storage
+        structured_messages = save_histories.get(sid, [])
+        tool_calls_log = save_tool_calls.get(sid, [])
 
         # Retry with fallback to local file
         saved = False
         for attempt in range(2):
             try:
                 async with get_db() as db:
-                    await add_history(db=db, name=name, email=email, messages=structured_messages)
+                    await add_history(db=db, name=name, email=email,
+                                      messages=structured_messages, conversation_id=conversation_id,
+                                      tool_calls=tool_calls_log)
                 saved = True
                 break
             except Exception as db_err:
@@ -410,7 +435,9 @@ async def disconnect_service(sid):
             try:
                 fallback = {
                     "name": name, "email": email,
+                    "conversation_id": conversation_id,
                     "messages": structured_messages,
+                    "tool_calls": tool_calls_log,
                     "timestamp": datetime.now().isoformat()
                 }
                 fallback_path = Path("logs/failed_saves.jsonl")
@@ -423,7 +450,7 @@ async def disconnect_service(sid):
 
         # Send Discord notification (fire-and-forget, don't block cleanup)
         try:
-            await _notify_discord(name, email, history)
+            await _notify_discord(name, email, structured_messages, conversation_id)
         except Exception as notif_err:
             log.warning(f"Discord notification failed: {notif_err}")
 
@@ -432,5 +459,7 @@ async def disconnect_service(sid):
     finally:
         # Always clean up memory
         message_histories.pop(sid, None)
+        save_histories.pop(sid, None)
+        save_tool_calls.pop(sid, None)
         user_map.pop(sid, None)
         session_last_active.pop(sid, None)

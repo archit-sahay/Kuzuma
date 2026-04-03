@@ -25,9 +25,11 @@ class PyObjectId(ObjectId):
 # Pydantic model for request/response
 class History(BaseModel):
     # id: Optional[PyObjectId] = Field(default=None, alias="_id")
+    conversation_id: Optional[str] = None
     email: EmailStr
     name: str
     messages: list = Field(default_factory=list)  # list of {role, content, timestamp}
+    tool_calls: list = Field(default_factory=list)  # list of {name, args, timestamp}
     created_on: Optional[datetime] = Field(default_factory=datetime.utcnow)
 
     class Config:
