@@ -199,13 +199,10 @@ def get_currently_watching():
     }
     '''
 
-    data = _graphql_query(query=query, variables={"userName": "Architrash"})
-
-    if "errors" in data:
-        return f"API Error: {data['errors']}"
-    collection = data.get("data", {}).get("MediaListCollection")
-    if not collection or not collection.get("lists"):
-        return "You are not currently watching any anime."
+    result = _fetch_anilist_collection(query, {"userName": "Architrash"}, "You are not currently watching any anime.")
+    if isinstance(result, str):
+        return result
+    collection = result
     anime_list = []
     anilist_ = []
     for lst in collection["lists"]:
@@ -300,14 +297,10 @@ def get_rated_anime(limit: int = 10, score_filter: str = "top", min_score: int =
     }
     '''
 
-    data = _graphql_query(query=query, variables={"userName": "Architrash"})
-
-    if "errors" in data:
-        return f"API Error: {data['errors']}"
-
-    collection = data.get("data", {}).get("MediaListCollection")
-    if not collection or not collection.get("lists"):
-        return "No anime data found."
+    result = _fetch_anilist_collection(query, {"userName": "Architrash"})
+    if isinstance(result, str):
+        return result
+    collection = result
 
     # Collect all entries with scores
     all_anime = []
@@ -377,14 +370,10 @@ def get_anime_stats():
     }
     '''
 
-    stats_data = _graphql_query(query=query, variables={"userName": "Architrash"})
-
-    if "errors" in stats_data:
-        return f"API Error: {stats_data['errors']}"
-
-    collection_ = stats_data.get("data", {}).get("MediaListCollection")
-    if not collection_ or not collection_.get("lists"):
-        return "No anime data found."
+    result = _fetch_anilist_collection(query, {"userName": "Architrash"})
+    if isinstance(result, str):
+        return result
+    collection_ = result
 
     # Collect all scores
     scores = []
@@ -409,7 +398,21 @@ def get_anime_stats():
     }
 
 
-def _graphql_query(query: str, variables: dict = None):
+def _fetch_anilist_collection(query: str, variables: dict, empty_msg: str = "No anime data found.") -> dict | str:
+    """Run a MediaListCollection query and return the collection dict on success.
+
+    On API error or empty result, returns a user-facing message string.
+    """
+    data = _graphql_query(query=query, variables=variables)
+    if "errors" in data:
+        return f"API Error: {data['errors']}"
+    collection = data.get("data", {}).get("MediaListCollection")
+    if not collection or not collection.get("lists"):
+        return empty_msg
+    return collection
+
+
+def _graphql_query(query: str, variables: dict | None = None) -> dict:
     """Helper function to make GraphQL queries to AniList API.
     Public profile queries don't require auth — eliminates token expiry issues."""
     if _anilist_breaker.is_open:
