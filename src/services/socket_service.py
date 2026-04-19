@@ -5,7 +5,7 @@ import re
 import time
 import uuid
 import requests as http_requests
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from src.utils.prompt_template import prompt
 from src.config.socket_config import create_socketio_app
@@ -42,7 +42,7 @@ session_last_active = {}  # sid -> timestamp
 
 # ─── Discord Notification ────────────────────────────────────────────────────
 
-async def _notify_discord(name: str, email: str, save_messages: list, conversation_id: str = None):
+async def _notify_discord(name: str, email: str, save_messages: list, conversation_id: str = None, reason: str = "disconnect"):
     """Send a chat summary to Discord webhook on conversation end."""
     if not DISCORD_WEBHOOK_URL:
         return
@@ -85,6 +85,7 @@ async def _notify_discord(name: str, email: str, save_messages: list, conversati
         summary = f"({len(user_msgs)} messages exchanged, summary unavailable)"
 
     conv_id_short = conversation_id[:8] if conversation_id else "n/a"
+    ended_label = "Idle timeout" if reason == "stale_timeout" else "Clean disconnect"
     embed = {
         "content": "@everyone",
         "embeds": [{
@@ -95,9 +96,10 @@ async def _notify_discord(name: str, email: str, save_messages: list, conversati
                 {"name": "Email", "value": email, "inline": True},
                 {"name": "Messages", "value": str(len(user_msgs)), "inline": True},
                 {"name": "ID", "value": conv_id_short, "inline": True},
+                {"name": "Ended via", "value": ended_label, "inline": True},
                 {"name": "Summary", "value": summary[:1024]},
             ],
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }]
     }
 
@@ -120,11 +122,7 @@ async def cleanup_stale_sessions():
         stale = [sid for sid, ts in session_last_active.items() if now - ts > SESSION_TTL]
         for sid in stale:
             log.info(f"Evicting stale session: {sid}")
-            message_histories.pop(sid, None)
-            save_histories.pop(sid, None)
-            save_tool_calls.pop(sid, None)
-            user_map.pop(sid, None)
-            session_last_active.pop(sid, None)
+            await _persist_and_cleanup(sid, reason="stale_timeout")
         # Clean up expired cache entries
         cache.cleanup()
 
@@ -396,10 +394,15 @@ async def message_service(sid, message: str):
         }, to=sid)
 
 
-async def disconnect_service(sid):
+async def _persist_and_cleanup(sid, reason: str = "disconnect"):
+    """Save conversation to MongoDB, notify Discord, and free memory.
+
+    Shared by both clean disconnects and stale-session eviction.
+    `reason` is surfaced in logs to distinguish the two paths.
+    """
     try:
         if sid not in message_histories or sid not in user_map:
-            log.info(f"No data found for sid: {sid}")
+            log.info(f"No data found for sid: {sid} ({reason})")
             return
 
         user_data = user_map[sid]
@@ -422,6 +425,7 @@ async def disconnect_service(sid):
                                       messages=structured_messages, conversation_id=conversation_id,
                                       tool_calls=tool_calls_log)
                 saved = True
+                log.info(f"Saved conversation for {email} ({reason})")
                 break
             except Exception as db_err:
                 if attempt == 0:
@@ -438,6 +442,7 @@ async def disconnect_service(sid):
                     "conversation_id": conversation_id,
                     "messages": structured_messages,
                     "tool_calls": tool_calls_log,
+                    "reason": reason,
                     "timestamp": datetime.now().isoformat()
                 }
                 fallback_path = Path("logs/failed_saves.jsonl")
@@ -450,12 +455,12 @@ async def disconnect_service(sid):
 
         # Send Discord notification (fire-and-forget, don't block cleanup)
         try:
-            await _notify_discord(name, email, structured_messages, conversation_id)
+            await _notify_discord(name, email, structured_messages, conversation_id, reason=reason)
         except Exception as notif_err:
             log.warning(f"Discord notification failed: {notif_err}")
 
     except Exception as e:
-        log.error(f"Error in disconnect_service: {e}", exc_info=True)
+        log.error(f"Error in _persist_and_cleanup ({reason}): {e}", exc_info=True)
     finally:
         # Always clean up memory
         message_histories.pop(sid, None)
@@ -463,3 +468,7 @@ async def disconnect_service(sid):
         save_tool_calls.pop(sid, None)
         user_map.pop(sid, None)
         session_last_active.pop(sid, None)
+
+
+async def disconnect_service(sid):
+    await _persist_and_cleanup(sid, reason="disconnect")

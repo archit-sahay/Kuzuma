@@ -1,8 +1,7 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
-# from pydantic import core_schema
 
 
 class PyObjectId(ObjectId):
@@ -17,9 +16,9 @@ class PyObjectId(ObjectId):
             raise ValueError("Invalid ObjectId")
         return ObjectId(v)
 
-    def __get_pydantic_json_schema__(self, core_schema):
-        # Tell Pydantic this should be serialized as a string
-        return core_schema.StringSchema()
+    @staticmethod
+    def __get_pydantic_json_schema__(schema, handler):
+        return handler(schema)
 
 
 # Pydantic model for request/response
@@ -30,9 +29,10 @@ class History(BaseModel):
     name: str
     messages: list = Field(default_factory=list)  # list of {role, content, timestamp}
     tool_calls: list = Field(default_factory=list)  # list of {name, args, timestamp}
-    created_on: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    created_on: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    class Config:
-        allow_population_by_field_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+    model_config = ConfigDict(
+        populate_by_name=True,
+        arbitrary_types_allowed=True,
+        json_encoders={ObjectId: str},
+    )

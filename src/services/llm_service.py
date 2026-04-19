@@ -1,44 +1,15 @@
 import os
-import time
 import asyncio
 from groq import Groq
 from openai import OpenAI
 from dotenv import load_dotenv
+from src.utils.circuit_breaker import CircuitBreaker
 from src.logger import get_logger
 
 log = get_logger(__name__)
 load_dotenv()
 
 LLM_TIMEOUT = 30  # seconds
-
-
-class CircuitBreaker:
-    """Simple circuit breaker: opens after `threshold` consecutive failures."""
-
-    def __init__(self, threshold=3, recovery_time=60):
-        self.threshold = threshold
-        self.recovery_time = recovery_time
-        self.failures = 0
-        self.opened_at = None
-
-    @property
-    def is_open(self):
-        if self.opened_at is None:
-            return False
-        if time.time() - self.opened_at > self.recovery_time:
-            # Half-open: allow one probe
-            return False
-        return True
-
-    def record_success(self):
-        self.failures = 0
-        self.opened_at = None
-
-    def record_failure(self):
-        self.failures += 1
-        if self.failures >= self.threshold:
-            self.opened_at = time.time()
-            log.warning(f"Circuit breaker opened after {self.failures} failures")
 
 
 class LLMProvider:
@@ -48,7 +19,7 @@ class LLMProvider:
         self.name = name
         self.client = client
         self.model = model
-        self.breaker = breaker or CircuitBreaker()
+        self.breaker = breaker or CircuitBreaker(name=name)
 
     async def create(self, messages, tools=None, tool_choice="auto", temperature=0.7, stream=False):
         if self.breaker.is_open:

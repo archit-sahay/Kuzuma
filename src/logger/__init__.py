@@ -2,6 +2,7 @@ import gzip
 import logging
 import os
 import shutil
+import sys
 import time
 from logging import Logger
 from logging.handlers import RotatingFileHandler
@@ -30,16 +31,15 @@ class GzipRotatingFileHandler(RotatingFileHandler):
         # Close the current log file and rotate it
         if self.stream:
             self.stream.close()
-            self.stream = None
+            self.stream = None  # type: ignore[assignment]
 
         # Rotate the log (rename the current log file to the new rotated name)
         os.rename(self.baseFilename, rotated_log)
 
         # Compress the rotated log file
         gz_filename = rotated_log + ".gz"
-        with open(rotated_log, 'rb') as f_in:
-            with gzip.open(gz_filename, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
+        with open(rotated_log, 'rb') as f_in, gzip.GzipFile(gz_filename, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
 
         print(f"Compressed {rotated_log} to {gz_filename}")
 
@@ -59,8 +59,9 @@ class GzipRotatingFileHandler(RotatingFileHandler):
             )
             for old_gz in gz_files[:-MAX_GZ_FILES]:
                 os.remove(os.path.join(log_dir, old_gz))
-        except Exception:
-            pass  # don't crash logging over cleanup
+        except Exception as e:
+            # don't crash logging over cleanup — can't use the logger we're rotating
+            print(f"Log gzip cleanup failed (non-fatal): {e}", file=sys.stderr)
 
 
 def init_logger():
@@ -128,7 +129,7 @@ def _get_log_level() -> int:
 
 
 def _get_log_format() -> str:
-    default_log_format = "%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s"
+    default_log_format = "%(asctime)s %(levelname)s %(name)s %(threadName)s %(funcName)s:%(lineno)d : %(message)s"
     log_format = os.environ.get("LOG_FORMAT", default_log_format)
 
     if log_format is not None and log_format != "":

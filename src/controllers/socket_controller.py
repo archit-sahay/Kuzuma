@@ -3,7 +3,6 @@ import json
 import socketio
 from dotenv import load_dotenv
 from src.logger import get_logger
-from src.config.socket_config import create_socketio_app
 from src.services.socket_service import message_service, disconnect_service, start_service, sio
 from src.utils.rate_limiter import rate_limiter
 

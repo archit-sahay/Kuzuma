@@ -1,10 +1,10 @@
 # controllers/spotify_auth.py
 import os
+
+from dotenv import load_dotenv
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
-from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
-from dotenv import load_dotenv
 
 load_dotenv()
 

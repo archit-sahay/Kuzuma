@@ -1,50 +1,22 @@
 import os
-import time
 import requests
 from collections import Counter
 from datetime import date
 from pathlib import Path
-from typing import List, Dict
 
 from dotenv import load_dotenv
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
-from src.utils.cache import cache, TTL_SHORT, TTL_MEDIUM, TTL_LONG
+from src.utils.cache import cache, TTL_SHORT, TTL_MEDIUM
+from src.utils.circuit_breaker import CircuitBreaker
 from src.logger import get_logger
 
 log = get_logger(__name__)
 
 
-class ToolCircuitBreaker:
-    """Lightweight circuit breaker for individual tools."""
-    def __init__(self, threshold=2, recovery_time=120):
-        self.threshold = threshold
-        self.recovery_time = recovery_time
-        self.failures = 0
-        self.opened_at = None
-
-    @property
-    def is_open(self):
-        if self.opened_at is None:
-            return False
-        if time.time() - self.opened_at > self.recovery_time:
-            return False  # half-open: allow probe
-        return True
-
-    def record_success(self):
-        self.failures = 0
-        self.opened_at = None
-
-    def record_failure(self):
-        self.failures += 1
-        if self.failures >= self.threshold:
-            self.opened_at = time.time()
-            log.warning(f"Tool circuit breaker opened after {self.failures} failures")
-
-
 # Per-service circuit breakers (shared across tools using same service)
-_spotify_breaker = ToolCircuitBreaker(threshold=2, recovery_time=120)
-_anilist_breaker = ToolCircuitBreaker(threshold=2, recovery_time=120)
+_spotify_breaker = CircuitBreaker(threshold=2, recovery_time=120, name="spotify")
+_anilist_breaker = CircuitBreaker(threshold=2, recovery_time=120, name="anilist")
 
 load_dotenv()
 
@@ -95,9 +67,11 @@ def _spotify_unavailable():
     return {"error": "Spotify is temporarily unavailable. Try again later!"}
 
 
-# ─── Tool: Top Tracks ─────────────────────────────────────────────────────────
-def get_top_tracks(limit: int = 5, time_range: str = "medium_term"):
-    cache_key = f"top_tracks:{limit}:{time_range}"
+def _spotify_cached_fetch(cache_key: str, ttl: int, fetch):
+    """Shared cache + client + error boilerplate for Spotify tools.
+
+    `fetch(sp)` receives a live Spotify client and returns the serialized result.
+    """
     cached = cache.get(cache_key)
     if cached:
         return cached
@@ -105,77 +79,51 @@ def get_top_tracks(limit: int = 5, time_range: str = "medium_term"):
     if not sp:
         return _spotify_unavailable()
     try:
-        items = sp.current_user_top_tracks(limit=limit, time_range=time_range)["items"]
-        result = [
+        result = fetch(sp)
+        cache.set(cache_key, result, ttl)
+        return result
+    except Exception as e:
+        log.error(f"{cache_key} failed: {e}")
+        return _spotify_unavailable()
+
+
+# ─── Tool: Top Tracks ─────────────────────────────────────────────────────────
+def get_top_tracks(limit: int = 5, time_range: str = "medium_term"):
+    def _fetch(sp):
+        items = (sp.current_user_top_tracks(limit=limit, time_range=time_range) or {}).get("items", [])
+        return [
             {"name": t["name"], "artist": t["artists"][0]["name"], "url": t["external_urls"]["spotify"]}
             for t in items
         ]
-        cache.set(cache_key, result, TTL_SHORT)
-        return result
-    except Exception as e:
-        log.error(f"get_top_tracks failed: {e}")
-        return _spotify_unavailable()
+    return _spotify_cached_fetch(f"top_tracks:{limit}:{time_range}", TTL_SHORT, _fetch)
 
 
 # ─── Tool: Top Artists ────────────────────────────────────────────────────────
 def get_top_artists(limit: int = 5, time_range: str = "medium_term"):
-    cache_key = f"top_artists:{limit}:{time_range}"
-    cached = cache.get(cache_key)
-    if cached:
-        return cached
-    sp = _get_spotify_client()
-    if not sp:
-        return _spotify_unavailable()
-    try:
-        items = sp.current_user_top_artists(limit=limit, time_range=time_range)["items"]
-        result = [
+    def _fetch(sp):
+        items = (sp.current_user_top_artists(limit=limit, time_range=time_range) or {}).get("items", [])
+        return [
             {"name": a["name"], "url": a["external_urls"]["spotify"]}
             for a in items
         ]
-        cache.set(cache_key, result, TTL_SHORT)
-        return result
-    except Exception as e:
-        log.error(f"get_top_artists failed: {e}")
-        return _spotify_unavailable()
+    return _spotify_cached_fetch(f"top_artists:{limit}:{time_range}", TTL_SHORT, _fetch)
 
 
 def get_recently_played(limit: int = 20):
-    cache_key = f"recently_played:{limit}"
-    cached = cache.get(cache_key)
-    if cached:
-        return cached
-    sp = _get_spotify_client()
-    if not sp:
-        return _spotify_unavailable()
-    try:
-        items = sp.current_user_recently_played(limit=limit)["items"]
-        result = [{"track": it["track"]["name"], "played_at": it["played_at"]} for it in items]
-        cache.set(cache_key, result, TTL_SHORT)
-        return result
-    except Exception as e:
-        log.error(f"get_recently_played failed: {e}")
-        return _spotify_unavailable()
+    def _fetch(sp):
+        items = (sp.current_user_recently_played(limit=limit) or {}).get("items", [])
+        return [{"track": it["track"]["name"], "played_at": it["played_at"]} for it in items]
+    return _spotify_cached_fetch(f"recently_played:{limit}", TTL_SHORT, _fetch)
 
 
 def get_genre_distribution(time_range: str = "medium_term", limit: int = 20):
-    cache_key = f"genre_dist:{time_range}:{limit}"
-    cached = cache.get(cache_key)
-    if cached:
-        return cached
-    sp = _get_spotify_client()
-    if not sp:
-        return _spotify_unavailable()
-    try:
-        items = sp.current_user_top_artists(limit=limit, time_range=time_range)["items"]
+    def _fetch(sp):
+        items = (sp.current_user_top_artists(limit=limit, time_range=time_range) or {}).get("items", [])
         genres = []
         for artist in items:
             genres.extend(artist.get("genres", []))
-        result = [g for g, _ in Counter(genres).most_common(5)]
-        cache.set(cache_key, result, TTL_MEDIUM)
-        return result
-    except Exception as e:
-        log.error(f"get_genre_distribution failed: {e}")
-        return _spotify_unavailable()
+        return [g for g, _ in Counter(genres).most_common(5)]
+    return _spotify_cached_fetch(f"genre_dist:{time_range}:{limit}", TTL_MEDIUM, _fetch)
 
 
 def get_anime_rating(anime_name):
@@ -275,7 +223,7 @@ def get_currently_watching():
 
 def get_professional_experience():
     """
-    Calculate professional experience from January 15, 2024 to current date.
+    Calculate professional experience from January-15-2024 to current date.
     Returns a dictionary with years and months of experience.
     """
     start_date = date(2024, 1, 15)
