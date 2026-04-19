@@ -23,7 +23,7 @@ load_dotenv()
 client_id = os.getenv('SPOTIPY_CLIENT_ID')
 client_secret = os.getenv('SPOTIPY_CLIENT_SECRET')
 redirect_uri = 'http://127.0.0.1:6969/auth/spotify/callback'
-scope = 'user-top-read'
+scope = 'user-top-read user-read-recently-played'
 HERE = Path(__file__).resolve().parent   # .../src/utils
 
 # 2. Climb up to your project root (two levels up: utils → src → kazuma)
