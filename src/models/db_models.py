@@ -27,6 +27,7 @@ class History(BaseModel):
     conversation_id: Optional[str] = None
     email: EmailStr
     name: str
+    client_ip: Optional[str] = None
     messages: list = Field(default_factory=list)  # list of {role, content, timestamp}
     tool_calls: list = Field(default_factory=list)  # list of {name, args, timestamp}
     created_on: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))

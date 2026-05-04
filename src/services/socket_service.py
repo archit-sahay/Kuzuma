@@ -38,11 +38,12 @@ save_histories = {}  # sid -> list of {role, content, timestamp} — never compa
 save_tool_calls = {}  # sid -> list of {name, args, timestamp} — tool calls log for MongoDB
 user_map = {}
 session_last_active = {}  # sid -> timestamp
+session_ips = {}  # sid -> client IP captured at connect
 
 
 # ─── Discord Notification ────────────────────────────────────────────────────
 
-async def _notify_discord(name: str, email: str, save_messages: list, conversation_id: str = None, reason: str = "disconnect"):
+async def _notify_discord(name: str, email: str, save_messages: list, conversation_id: str = None, reason: str = "disconnect", client_ip: str = None):
     """Send a chat summary to Discord webhook on conversation end."""
     if not DISCORD_WEBHOOK_URL:
         return
@@ -96,6 +97,7 @@ async def _notify_discord(name: str, email: str, save_messages: list, conversati
                 {"name": "Email", "value": email, "inline": True},
                 {"name": "Messages", "value": str(len(user_msgs)), "inline": True},
                 {"name": "ID", "value": conv_id_short, "inline": True},
+                {"name": "IP", "value": client_ip or "unknown", "inline": True},
                 {"name": "Ended via", "value": ended_label, "inline": True},
                 {"name": "Summary", "value": summary[:1024]},
             ],
@@ -411,6 +413,7 @@ async def _persist_and_cleanup(sid, reason: str = "disconnect"):
         name = user_data.get("name", "Unknown User")
         email = user_data.get("email", "unknown@unknown")
         conversation_id = user_data.get("conversation_id")
+        client_ip = session_ips.get(sid)
 
         # Use save_histories (full, uncompacted conversation) for storage
         structured_messages = save_histories.get(sid, [])
@@ -423,7 +426,7 @@ async def _persist_and_cleanup(sid, reason: str = "disconnect"):
                 async with get_db() as db:
                     await add_history(db=db, name=name, email=email,
                                       messages=structured_messages, conversation_id=conversation_id,
-                                      tool_calls=tool_calls_log)
+                                      tool_calls=tool_calls_log, client_ip=client_ip)
                 saved = True
                 log.info(f"Saved conversation for {email} ({reason})")
                 break
@@ -440,6 +443,7 @@ async def _persist_and_cleanup(sid, reason: str = "disconnect"):
                 fallback = {
                     "name": name, "email": email,
                     "conversation_id": conversation_id,
+                    "client_ip": client_ip,
                     "messages": structured_messages,
                     "tool_calls": tool_calls_log,
                     "reason": reason,
@@ -455,7 +459,7 @@ async def _persist_and_cleanup(sid, reason: str = "disconnect"):
 
         # Send Discord notification (fire-and-forget, don't block cleanup)
         try:
-            await _notify_discord(name, email, structured_messages, conversation_id, reason=reason)
+            await _notify_discord(name, email, structured_messages, conversation_id, reason=reason, client_ip=client_ip)
         except Exception as notif_err:
             log.warning(f"Discord notification failed: {notif_err}")
 
@@ -468,6 +472,7 @@ async def _persist_and_cleanup(sid, reason: str = "disconnect"):
         save_tool_calls.pop(sid, None)
         user_map.pop(sid, None)
         session_last_active.pop(sid, None)
+        session_ips.pop(sid, None)
 
 
 async def disconnect_service(sid):

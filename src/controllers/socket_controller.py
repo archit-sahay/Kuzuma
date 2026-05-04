@@ -3,7 +3,7 @@ import json
 import socketio
 from dotenv import load_dotenv
 from src.logger import get_logger
-from src.services.socket_service import message_service, disconnect_service, start_service, sio
+from src.services.socket_service import message_service, disconnect_service, start_service, sio, session_ips
 from src.utils.rate_limiter import rate_limiter
 
 load_dotenv()
@@ -19,6 +19,7 @@ socket_app = socketio.ASGIApp(sio)
 async def connect(sid, environ):
     # Log only essential info, not the entire environ dict
     client_ip = environ.get("HTTP_X_REAL_IP", environ.get("REMOTE_ADDR", "unknown"))
+    session_ips[sid] = client_ip
     log.info(f"[{datetime.now().strftime('%A, %d-%m-%Y %H:%M:%S')}] Connection from [{sid}] IP: [{client_ip}]")
 
 
