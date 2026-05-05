@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import random
 import re
 import time
 import uuid
@@ -39,6 +40,48 @@ save_tool_calls = {}  # sid -> list of {name, args, timestamp} — tool calls lo
 user_map = {}
 session_last_active = {}  # sid -> timestamp
 session_ips = {}  # sid -> client IP captured at connect
+
+
+# ─── Canned fallback replies ─────────────────────────────────────────────────
+# When the LLM chain fails or times out we still want to say *something*.
+# Multiple variants per category so a visitor retrying twice doesn't see the
+# identical line twice in a row.
+
+_CANNED_REPLIES = {
+    "generic_error": [
+        "Something tripped me up. Mind trying that again?",
+        "Brain freeze — give me another shot?",
+        "My circuits hiccupped. Try me again?",
+        "That one didn't compile. Retry?",
+        "Yeah no, that broke me. One more time?",
+        "404 on my brain. Send it once more?",
+    ],
+    "timeout": [
+        "That's taking longer than expected — my brain needs a moment. Try again?",
+        "Took too long to think on that one. Try again?",
+        "I zoned out mid-thought. Repeat that?",
+        "Brain went on a coffee break. Try once more?",
+    ],
+    "stream_fallback": [
+        "I got a bit lost there. Could you rephrase that?",
+        "Lost the plot. Mind rephrasing?",
+        "Drew a blank. Wanna try a different angle?",
+        "That one slipped through. Say it again?",
+    ],
+}
+
+
+async def _emit_and_save_canned(sid, category):
+    """Emit a randomly-picked canned reply AND record it as the assistant
+    turn so the saved transcript matches what the visitor actually saw."""
+    text = random.choice(_CANNED_REPLIES[category])
+    message_histories.setdefault(sid, []).append({"role": "assistant", "content": text})
+    save_histories.setdefault(sid, []).append({
+        "role": "assistant", "content": text,
+        "timestamp": datetime.now().isoformat()
+    })
+    await sio.emit("message", {"text": text}, to=sid)
+    return text
 
 
 # ─── Discord Notification ────────────────────────────────────────────────────
@@ -368,32 +411,28 @@ async def message_service(sid, message: str):
                         full_content += delta
                         await sio.emit("stream", {"text": delta}, to=sid)
 
-                content = _sanitize_response(full_content) if full_content else "I got a bit lost there. Could you rephrase that?"
-                message_histories[sid].append({"role": "assistant", "content": content})
-                save_histories.setdefault(sid, []).append({
-                    "role": "assistant", "content": content, "timestamp": datetime.now().isoformat()
-                })
-                await sio.emit("stream_end", {}, to=sid)
-                log.info(f"[{datetime.now().strftime('%A, %d-%m-%Y %H:%M:%S')}] Streamed Response: [{content[:100]}...]")
+                if full_content:
+                    content = _sanitize_response(full_content)
+                    message_histories[sid].append({"role": "assistant", "content": content})
+                    save_histories.setdefault(sid, []).append({
+                        "role": "assistant", "content": content, "timestamp": datetime.now().isoformat()
+                    })
+                    await sio.emit("stream_end", {}, to=sid)
+                    log.info(f"[{datetime.now().strftime('%A, %d-%m-%Y %H:%M:%S')}] Streamed Response: [{content[:100]}...]")
+                else:
+                    # Empty stream — fall back to a canned reply (saved + emitted)
+                    log.warning(f"Empty stream for {sid}, using canned fallback")
+                    await _emit_and_save_canned(sid, "stream_fallback")
             except Exception as stream_err:
                 log.warning(f"Streaming failed, falling back: {stream_err}")
-                content = "I got a bit lost there. Could you rephrase that?"
-                message_histories[sid].append({"role": "assistant", "content": content})
-                save_histories.setdefault(sid, []).append({
-                    "role": "assistant", "content": content, "timestamp": datetime.now().isoformat()
-                })
-                await sio.emit("message", {"text": content}, to=sid)
+                await _emit_and_save_canned(sid, "stream_fallback")
 
     except asyncio.TimeoutError:
         log.error(f"LLM call timed out for {sid}")
-        await sio.emit("message", {
-            "text": "That's taking longer than expected — my brain needs a moment. Try again?"
-        }, to=sid)
+        await _emit_and_save_canned(sid, "timeout")
     except Exception as e:
         log.error(f"Exception in message_service: {e}", exc_info=True)
-        await sio.emit("message", {
-            "text": "Something tripped me up. Mind trying that again?"
-        }, to=sid)
+        await _emit_and_save_canned(sid, "generic_error")
 
 
 async def _persist_and_cleanup(sid, reason: str = "disconnect"):

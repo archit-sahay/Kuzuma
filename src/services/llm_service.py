@@ -85,16 +85,22 @@ _groq_model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
 
 _providers = [LLMProvider("groq", _groq_client, _groq_model)]
 
-# Add OpenRouter fallback if key is configured
+# Add OpenRouter fallback chain if key is configured.
+# Multiple models supported via OPENROUTER_MODELS (comma-separated). Each gets
+# its own LLMProvider entry so a single bad model trips its own circuit
+# breaker without taking out the rest of the chain.
+# Backward compat: if only OPENROUTER_MODEL (singular) is set, use that.
 _openrouter_key = os.getenv("OPENROUTER_API_KEY")
 if _openrouter_key:
     _openrouter_client = OpenAI(
         api_key=_openrouter_key,
         base_url="https://openrouter.ai/api/v1"
     )
-    _openrouter_model = os.getenv("OPENROUTER_MODEL", "openrouter/auto")
-    _providers.append(LLMProvider("openrouter", _openrouter_client, _openrouter_model))
-    log.info(f"OpenRouter fallback configured with model: {_openrouter_model}")
+    _or_models_env = os.getenv("OPENROUTER_MODELS") or os.getenv("OPENROUTER_MODEL", "openrouter/auto")
+    _or_models = [m.strip() for m in _or_models_env.split(",") if m.strip()]
+    for _m in _or_models:
+        _providers.append(LLMProvider(f"openrouter:{_m}", _openrouter_client, _m))
+    log.info(f"OpenRouter fallback chain configured ({len(_or_models)} model(s)): {_or_models}")
 else:
     log.warning("No OPENROUTER_API_KEY set — running without fallback")
 
