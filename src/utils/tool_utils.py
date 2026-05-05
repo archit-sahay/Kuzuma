@@ -1,12 +1,13 @@
 import os
 import requests
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
+from spotipy.exceptions import SpotifyOauthError
 from src.utils.cache import cache, TTL_SHORT, TTL_MEDIUM
 from src.utils.circuit_breaker import CircuitBreaker
 from src.logger import get_logger
@@ -43,6 +44,45 @@ _sp_oauth = SpotifyOAuth(
 
 
 # ─── Internal helper to get a valid Spotify client ───────────────────────────
+def _alert_spotify_revoked(error):
+    """One-shot Discord alert when Spotify refresh token is revoked.
+    Sends only when the breaker was previously closed — re-fires only after
+    a successful re-auth resets the breaker, so this won't spam every hour."""
+    webhook = os.getenv("DISCORD_WEBHOOK_URL")
+    if not webhook:
+        return
+    try:
+        requests.post(webhook, json={
+            "content": "@everyone",
+            "embeds": [{
+                "title": "🎵 Spotify needs re-auth",
+                "description": (
+                    "Refresh token revoked. Spotify tools will return "
+                    "'temporarily unavailable' until you re-auth via "
+                    "`http://127.0.0.1:6969/auth/spotify/login` and SCP the "
+                    "fresh `.cache-spotify.json` to the server."
+                ),
+                "color": 0xEF4444,  # red
+                "fields": [
+                    {"name": "Error", "value": str(error)[:300], "inline": False},
+                ],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }]
+        }, timeout=5)
+        log.info("Discord alert sent: Spotify refresh token revoked")
+    except Exception as e:
+        log.warning(f"Spotify revoke-alert webhook failed: {e}")
+
+
+def _is_invalid_grant(error) -> bool:
+    """Detect the specific Spotify error that means the refresh token is dead
+    and no amount of retrying will help — only manual re-auth fixes it."""
+    if isinstance(error, SpotifyOauthError):
+        return True  # SpotifyOauthError is only raised on hard auth failures
+    msg = str(error).lower()
+    return "invalid_grant" in msg or "refresh token revoked" in msg
+
+
 def _get_spotify_client():
     """Returns a Spotify client or None if auth fails."""
     if _spotify_breaker.is_open:
@@ -58,6 +98,17 @@ def _get_spotify_client():
         _spotify_breaker.record_success()
         return Spotify(auth=token_info["access_token"])
     except Exception as e:
+        if _is_invalid_grant(e):
+            # Refresh token is permanently dead until manual re-auth.
+            # Trip the breaker hard so we stop hammering Spotify, and fire
+            # a one-shot Discord alert (only on the breaker's closed→open
+            # transition — won't spam if we hit this path again later).
+            already_open = _spotify_breaker.opened_at is not None
+            _spotify_breaker.trip(recovery_seconds=3600)  # 1 hour
+            if not already_open:
+                log.error(f"Spotify refresh token revoked — re-auth required: {e}")
+                _alert_spotify_revoked(e)
+            return None
         log.error(f"Spotify auth failed: {e}")
         _spotify_breaker.record_failure()
         return None

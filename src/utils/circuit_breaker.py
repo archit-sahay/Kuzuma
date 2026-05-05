@@ -31,3 +31,13 @@ class CircuitBreaker:
         if self.failures >= self.threshold:
             self.opened_at = time.time()
             log.warning(f"Circuit breaker '{self.name}' opened after {self.failures} failures")
+
+    def trip(self, recovery_seconds: int | None = None) -> None:
+        """Force-open the breaker immediately. Use for non-recoverable errors
+        where retrying without manual intervention is hopeless (e.g. revoked
+        OAuth refresh tokens). Optionally override recovery_time for this trip."""
+        self.failures = self.threshold
+        self.opened_at = time.time()
+        if recovery_seconds is not None:
+            self.recovery_time = recovery_seconds
+        log.warning(f"Circuit breaker '{self.name}' force-tripped (recovery in {self.recovery_time}s)")
